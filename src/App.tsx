@@ -6,20 +6,21 @@
 import {
   Code2,
   FolderOpen,
-  Terminal,
   Settings,
   FileCode,
   Play,
   Cpu,
   X,
-  CheckCircle2,
-  AlertCircle,
   ChevronRight,
   ChevronDown,
-  File
+  Square,
+  Send,
+  Trash2
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
+import { TerminalPane } from './TerminalPane';
+import { OutputPane } from './OutputPane';
 
 // TreeNode interface for file explorer
 interface TreeNode {
@@ -29,18 +30,52 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
-// Recursive Tree Component
-const FileTree = ({ nodes, onSelect, onContextMenu, depth = 0 }: { nodes: TreeNode[], onSelect: (path: string, name: string) => void, onContextMenu: (e: React.MouseEvent, node: TreeNode) => void, depth?: number }) => {
+interface FileTreeProps {
+  nodes: TreeNode[];
+  onSelect: (path: string, name: string) => void;
+  onContextMenu: (e: React.MouseEvent, node?: TreeNode) => void;
+  depth?: number;
+  currentPath?: string;
+  creatingNode?: { path: string, type: 'file' | 'directory' } | null;
+  createInputValue?: string;
+  setCreateInputValue?: (v: string) => void;
+  handleCreateSubmit?: () => void;
+  setCreatingNode?: (v: null) => void;
+}
+
+const FileTree = ({ nodes, onSelect, onContextMenu, depth = 0, currentPath = '', creatingNode, createInputValue, setCreateInputValue, handleCreateSubmit, setCreatingNode }: FileTreeProps) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const toggleDir = (path: string) => setExpanded(prev => ({ ...prev, [path]: !prev[path] }));
 
+  const sortedNodes = [...nodes].sort((a, b) => {
+    if (a.type === b.type) return a.name.localeCompare(b.name);
+    return a.type === 'directory' ? -1 : 1;
+  });
+
   return (
     <div className="flex flex-col">
-      {nodes.sort((a, b) => {
-        if (a.type === b.type) return a.name.localeCompare(b.name);
-        return a.type === 'directory' ? -1 : 1;
-      }).map(node => (
+      {creatingNode && creatingNode.path === currentPath && (
+         <div 
+           className="flex items-center space-x-1 py-1 px-2 text-sm text-gray-400 group"
+           style={{ paddingLeft: `${depth * 12 + 12}px` }}
+         >
+           {creatingNode.type === 'directory' ? <FolderOpen size={14} className="text-orange-500" /> : <FileCode size={14} className="text-gray-500 ml-3 group-hover:text-orange-400" />}
+           <input 
+             type="text"
+             autoFocus
+             value={createInputValue}
+             onChange={(e) => setCreateInputValue?.(e.target.value)}
+             onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateSubmit?.();
+                if (e.key === 'Escape') setCreatingNode?.(null);
+             }}
+             onBlur={() => handleCreateSubmit?.()}
+             className="bg-transparent border border-orange-500 outline-none text-gray-200 px-1 py-0.5 w-32 text-xs"
+           />
+         </div>
+      )}
+      {sortedNodes.map(node => (
         <div key={node.path}>
           <div 
             onClick={() => node.type === 'directory' ? toggleDir(node.path) : onSelect(node.path, node.name)}
@@ -60,8 +95,19 @@ const FileTree = ({ nodes, onSelect, onContextMenu, depth = 0 }: { nodes: TreeNo
             )}
             <span className="truncate">{node.name}</span>
           </div>
-          {node.type === 'directory' && expanded[node.path] && node.children && (
-             <FileTree nodes={node.children} onSelect={onSelect} onContextMenu={onContextMenu} depth={depth + 1} />
+          {node.type === 'directory' && expanded[node.path] && (
+             <FileTree 
+               nodes={node.children || []} 
+               onSelect={onSelect} 
+               onContextMenu={onContextMenu} 
+               depth={depth + 1} 
+               currentPath={node.path}
+               creatingNode={creatingNode}
+               createInputValue={createInputValue}
+               setCreateInputValue={setCreateInputValue}
+               handleCreateSubmit={handleCreateSubmit}
+               setCreatingNode={setCreatingNode}
+             />
           )}
         </div>
       ))}
@@ -70,11 +116,34 @@ const FileTree = ({ nodes, onSelect, onContextMenu, depth = 0 }: { nodes: TreeNo
 };
 
 export default function App() {
-  const [messages, setMessages] = useState([
-    { role: 'system', content: 'VibeCoder initialized. Connected to local Ollama. Ready for execution.\n\nNote: If you have connection issues, ensure Ollama is running with `ollama run deepseek-coder:6.7b`. (The proxy server automatically handles CORS!)\n\nIf running via PM2, since `tsx` is a local dependency, use:\n`pm2 start ./node_modules/.bin/tsx --name echo -- server.ts`\nor\n`pm2 start npm --name echo -- run dev`' }
-  ]);
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vibecoder_messages');
+      if (saved) return JSON.parse(saved);
+    } catch(e) {}
+    return [
+      { role: 'system', content: `VibeCoder initialized. Connected to local Ollama.
+
+SYSTEM INSTRUCTIONS (For Model):
+You are VibeCoder, a local AI assistant. When the user asks you to code a project or create files, you MUST place ALL files in a new directory under the \`projects/\` folder (e.g. \`projects/my-new-app/\`).
+
+To create or edit a file, use EXACTLY this markdown format:
+\`\`\`file:projects/my-new-app/filename.ext
+<file contents here>
+\`\`\`
+The application will automatically parse these code blocks and write the files to disk. Always use this exact format!` }
+    ];
+  });
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  
+  const activeControllerRef = useRef<AbortController | null>(null);
+  const messagesRef = useRef(messages);
+  
+  useEffect(() => {
+    messagesRef.current = messages;
+    localStorage.setItem('vibecoder_messages', JSON.stringify(messages));
+  }, [messages]);
   
   // New States
   const [ollamaStatus, setOllamaStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
@@ -82,9 +151,12 @@ export default function App() {
   const [ollamaModel, setOllamaModel] = useState('deepseek-coder:6.7b');
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   
-  const [activeLeftTab, setActiveLeftTab] = useState<'explorer' | 'search' | 'terminal' | 'settings'>('explorer');
+  const [activeLeftTab, setActiveLeftTab] = useState<'explorer' | 'search'>('explorer');
   const [fileTree, setFileTree] = useState<TreeNode[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, node?: TreeNode } | null>(null);
+  
+  const [creatingNode, setCreatingNode] = useState<{ path: string, type: 'file' | 'directory' } | null>(null);
+  const [createInputValue, setCreateInputValue] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<{path: string, line: number, content: string}[]>([]);
@@ -200,19 +272,46 @@ export default function App() {
     }
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || isTyping) return;
-    
-    const userMessage = { role: 'user', content: input };
-    const currentMessages = [...messages, userMessage];
-    
-    setMessages(currentMessages);
+  const handleProcessInput = async () => {
+    const text = input.trim();
+    if (!text) return;
     setInput('');
-    setIsTyping(true);
-    
-    try {
-      setMessages(prev => [...prev, { role: 'agent', content: '' }]);
 
+    const isSteer = isTyping;
+
+    if (isTyping && activeControllerRef.current) {
+        activeControllerRef.current.abort();
+        await new Promise(r => setTimeout(r, 50));
+    }
+
+    const newMessages = [...messagesRef.current];
+
+    if (isSteer) {
+        newMessages.push({ role: 'user', content: `[STEER]: ${text}` });
+    } else {
+        newMessages.push({ role: 'user', content: text });
+    }
+    
+    newMessages.push({ role: 'agent', content: '' });
+    setMessages(newMessages);
+
+    setIsTyping(true);
+    const controller = new AbortController();
+    activeControllerRef.current = controller;
+
+    let finalAgentMessage = '';
+
+    const fileContexts = openFiles.map(f => `--- ${f.path} ---\n${fileContents[f.path] || ''}`).join('\n\n');
+    const systemMemoryAddon = fileContexts ? `\n\nCURRENT OPEN FILES CONTEXT:\n${fileContexts}` : '';
+
+    const payloadMessages = newMessages.slice(0, -1).map(m => {
+       if (m.role === 'system') {
+           return { role: 'system', content: m.content + systemMemoryAddon };
+       }
+       return { role: m.role === 'agent' ? 'assistant' : m.role, content: m.content };
+    });
+
+    try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -222,13 +321,11 @@ export default function App() {
           baseUrl: ollamaUrl,
           payload: {
             model: ollamaModel,
-            messages: currentMessages.map(m => ({
-               role: m.role === 'agent' ? 'assistant' : m.role,
-               content: m.content
-            })),
+            messages: payloadMessages,
             stream: true,
           }
         }),
+        signal: controller.signal
       });
 
       if (!response.ok) {
@@ -244,7 +341,6 @@ export default function App() {
       const decoder = new TextDecoder();
 
       if (reader) {
-        let agentMessage = '';
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -256,31 +352,87 @@ export default function App() {
             try {
               const parsed = JSON.parse(line);
               if (parsed.message?.content) {
-                agentMessage += parsed.message.content;
+                finalAgentMessage += parsed.message.content;
                 setMessages(prev => {
-                  const newMessages = [...prev];
-                  newMessages[newMessages.length - 1] = { role: 'agent', content: agentMessage };
-                  return newMessages;
+                  if (activeControllerRef.current !== controller) return prev;
+                  const currentMessages = [...prev];
+                  currentMessages[currentMessages.length - 1] = { role: 'agent', content: finalAgentMessage };
+                  return currentMessages;
                 });
               }
             } catch (e) {
-              console.error('Error parsing JSON chunk', e);
             }
           }
         }
       }
+      
+      if (activeControllerRef.current === controller && finalAgentMessage) {
+        const regex = /```(?:file:)?([^\n]+)\n([\s\S]*?)```/g;
+        let match;
+        const promises = [];
+        while ((match = regex.exec(finalAgentMessage)) !== null) {
+            const filePath = match[1].trim();
+            const content = match[2];
+            if (filePath.includes('/') || filePath.includes('.')) {
+                let actualPath = filePath;
+                if (actualPath.startsWith('file:')) {
+                    actualPath = actualPath.replace('file:', '').trim();
+                }
+                promises.push(
+                    fetch('/api/file', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: actualPath, content })
+                    })
+                );
+            }
+        }
+        if (promises.length > 0) {
+            await Promise.all(promises);
+            loadFileTree();
+        }
+      }
+      
     } catch (error: any) {
-      setMessages(prev => {
-        const newMessages = [...prev];
-        newMessages[newMessages.length - 1] = { 
-          role: 'system', 
-          content: `Error: ${error.message}\n\nPlease ensure your local Ollama is running and accessible.` 
-        };
-        return newMessages;
-      });
+      if (error.name === 'AbortError') {
+         if (!isSteer && activeControllerRef.current === controller) {
+             setMessages(prev => {
+                const copy = [...prev];
+                copy[copy.length - 1] = { role: 'system', content: '-- Stopped --' };
+                return copy;
+             });
+         }
+      } else {
+        if (activeControllerRef.current === controller) {
+            setMessages(prev => {
+              const currentMessages = [...prev];
+              currentMessages[currentMessages.length - 1] = { 
+                role: 'system', 
+                content: `Error: ${error.message}\n\nPlease ensure your local Ollama is running and accessible.` 
+              };
+              return currentMessages;
+            });
+        }
+      }
     } finally {
-      setIsTyping(false);
+      if (activeControllerRef.current === controller) {
+        setIsTyping(false);
+        activeControllerRef.current = null;
+      }
     }
+  };
+
+  const handleStopMode = () => {
+      if (activeControllerRef.current) {
+          activeControllerRef.current.abort();
+          activeControllerRef.current = null;
+          setIsTyping(false);
+          setMessages(prev => {
+             const copy = [...prev];
+             copy.push({ role: 'system', content: '-- Stopped by user --' });
+             return copy;
+          });
+      }
   };
 
   const handleContextMenu = (e: React.MouseEvent, node?: TreeNode) => {
@@ -288,42 +440,42 @@ export default function App() {
     setContextMenu({ x: e.clientX, y: e.clientY, node });
   };
 
-  const handleCreateFile = async () => {
+  const handleCreateFileContext = () => {
     if (!contextMenu) return;
-    const name = prompt('File name:');
-    if (!name) return;
     const basePath = contextMenu.node?.type === 'directory' ? contextMenu.node.path : (contextMenu.node ? contextMenu.node.path.split('/').slice(0, -1).join('/') : '');
-    const fullPath = basePath ? `${basePath}/${name}` : name;
-    
-    try {
-      await fetch('/api/file', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: fullPath, content: '' })
-      });
-      loadFileTree();
-    } catch (e) {
-      console.error(e);
-    }
+    setCreatingNode({ path: basePath, type: 'file' });
+    setCreateInputValue('');
+    setContextMenu(null);
   };
 
-  const handleCreateDir = async () => {
+  const handleCreateDirContext = () => {
     if (!contextMenu) return;
-    const name = prompt('Directory name:');
-    if (!name) return;
     const basePath = contextMenu.node?.type === 'directory' ? contextMenu.node.path : (contextMenu.node ? contextMenu.node.path.split('/').slice(0, -1).join('/') : '');
-    const fullPath = basePath ? `${basePath}/${name}` : name;
-    
-    try {
-      await fetch('/api/dir', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: fullPath })
-      });
-      loadFileTree();
-    } catch (e) {
-      console.error(e);
-    }
+    setCreatingNode({ path: basePath, type: 'directory' });
+    setCreateInputValue('');
+    setContextMenu(null);
+  };
+
+  const handleCreateSubmit = async () => {
+     if (!createInputValue.trim() || !creatingNode) {
+         setCreatingNode(null);
+         return;
+     }
+     
+     const fullPath = creatingNode.path ? `${creatingNode.path}/${createInputValue}` : createInputValue;
+     
+     try {
+         await fetch(creatingNode.type === 'file' ? '/api/file' : '/api/dir', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify(creatingNode.type === 'file' ? { path: fullPath, content: '' } : { path: fullPath })
+         });
+         loadFileTree();
+     } catch (e) {
+         console.error(e);
+     }
+     setCreatingNode(null);
+     setCreateInputValue('');
   };
 
   const handleDelete = async () => {
@@ -347,6 +499,23 @@ export default function App() {
     }
   };
 
+  const handleClearChat = () => {
+     if (confirm('Are you sure you want to clear the chat history?')) {
+        setMessages([
+          { role: 'system', content: `VibeCoder initialized. Connected to local Ollama.
+
+SYSTEM INSTRUCTIONS (For Model):
+You are VibeCoder, a local AI assistant. When the user asks you to code a project or create files, you MUST place ALL files in a new directory under the \`projects/\` folder (e.g. \`projects/my-new-app/\`).
+
+To create or edit a file, use EXACTLY this markdown format:
+\`\`\`file:projects/my-new-app/filename.ext
+<file contents here>
+\`\`\`
+The application will automatically parse these code blocks and write the files to disk. Always use this exact format!` }
+        ]);
+     }
+  };
+
   return (
     <div className="flex h-screen bg-[#050505] text-gray-300 font-sans overflow-hidden">
       {/* Context Menu */}
@@ -355,8 +524,8 @@ export default function App() {
           className="fixed z-50 bg-[#111] border border-[#333] py-1 rounded shadow-xl text-sm min-w-[150px]"
           style={{ top: contextMenu.y, left: contextMenu.x }}
         >
-          <button onClick={handleCreateFile} className="w-full text-left px-4 py-1.5 hover:bg-orange-600 hover:text-white text-gray-300">New File</button>
-          <button onClick={handleCreateDir} className="w-full text-left px-4 py-1.5 hover:bg-orange-600 hover:text-white text-gray-300">New Directory</button>
+          <button onClick={handleCreateFileContext} className="w-full text-left px-4 py-1.5 hover:bg-orange-600 hover:text-white text-gray-300">New File</button>
+          <button onClick={handleCreateDirContext} className="w-full text-left px-4 py-1.5 hover:bg-orange-600 hover:text-white text-gray-300">New Directory</button>
           {contextMenu.node && (
             <>
               <div className="h-px bg-[#333] my-1"></div>
@@ -383,12 +552,6 @@ export default function App() {
           <Code2 size={24} />
         </button>
         <div className="mt-auto flex flex-col space-y-6">
-          <button 
-            onClick={() => setActiveLeftTab('settings')}
-            className={`transition-colors ${activeLeftTab === 'settings' ? 'text-orange-500' : 'text-gray-500 hover:text-orange-400'}`}
-          >
-            <Settings size={24} />
-          </button>
         </div>
       </div>
 
@@ -404,49 +567,18 @@ export default function App() {
             <div className="flex-1 overflow-y-auto py-2 min-h-0" onContextMenu={(e) => {
               if (e.target === e.currentTarget) handleContextMenu(e);
             }}>
-              <FileTree nodes={fileTree} onSelect={openFile} onContextMenu={handleContextMenu} />
+              <FileTree 
+                nodes={fileTree} 
+                onSelect={openFile} 
+                onContextMenu={handleContextMenu} 
+                creatingNode={creatingNode}
+                createInputValue={createInputValue}
+                setCreateInputValue={setCreateInputValue}
+                handleCreateSubmit={handleCreateSubmit}
+                setCreatingNode={setCreatingNode}
+              />
             </div>
           </div>
-        )}
-        {activeLeftTab === 'settings' && (
-          <>
-            <div className="p-3 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-[#222222]">
-              Settings
-            </div>
-            <div className="p-4 flex flex-col space-y-4">
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Ollama URL</label>
-                <input 
-                  type="text" 
-                  value={ollamaUrl}
-                  onChange={(e) => setOllamaUrl(e.target.value)}
-                  className="w-full bg-[#111111] border border-[#333] rounded px-2 py-1 text-sm text-gray-200 outline-none focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Model Name</label>
-                {ollamaModels.length > 0 ? (
-                  <select 
-                    value={ollamaModel}
-                    onChange={(e) => setOllamaModel(e.target.value)}
-                    className="w-full bg-[#111111] border border-[#333] rounded px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-orange-500 transition-colors"
-                  >
-                    {ollamaModels.map(m => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <input 
-                    type="text" 
-                    value={ollamaModel}
-                    onChange={(e) => setOllamaModel(e.target.value)}
-                    className="w-full bg-[#111111] border border-[#333] rounded px-2 py-1 text-sm text-gray-200 outline-none focus:border-orange-500 transition-colors"
-                    placeholder="Enter model name..."
-                  />
-                )}
-              </div>
-            </div>
-          </>
         )}
         {activeLeftTab === 'search' && (
           <div className="flex-1 flex flex-col h-full overflow-hidden">
@@ -539,7 +671,7 @@ export default function App() {
 
         {/* Chat / Terminal Panel */}
         <div className="h-2/5 min-h-[250px] border-t border-[#222222] bg-[#0a0a0a] flex flex-col">
-          <div className="flex px-4 items-center justify-between border-b border-[#222222]">
+          <div className="flex px-4 items-center justify-between border-b border-[#222222] shrink-0">
             <div className="flex space-x-6">
               <button 
                 onClick={() => setBottomTab('chat')}
@@ -561,13 +693,29 @@ export default function App() {
               </button>
             </div>
             <div className="flex space-x-2 items-center">
-              <span className="text-xs text-orange-500 border border-orange-500/50 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(249,115,22,0.2)]">Ollama Node</span>
+              {bottomTab === 'chat' && (
+                 <button onClick={handleClearChat} className="text-gray-500 hover:text-red-400 p-1" title="Clear Chat History">
+                    <Trash2 size={14} />
+                 </button>
+              )}
+              <select 
+                value={ollamaModel}
+                onChange={(e) => setOllamaModel(e.target.value)}
+                className="bg-[#111] text-orange-200 border border-[#333] rounded px-2 py-0.5 text-xs outline-none focus:border-orange-500 max-w-[150px] truncate"
+              >
+                  {ollamaModels.length > 0 ? (
+                      ollamaModels.map(m => <option key={m} value={m}>{m}</option>)
+                  ) : (
+                      <option value={ollamaModel}>{ollamaModel}</option>
+                  )}
+              </select>
+              <span className="text-xs text-orange-500 border border-orange-500/50 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(249,115,22,0.2)] flex-shrink-0">Ollama Node</span>
             </div>
           </div>
           
-          <div className="flex-1 overflow-y-auto w-full">
+          <div className="flex-1 overflow-hidden w-full relative">
             {bottomTab === 'chat' && (
-              <div className="flex flex-col h-full">
+              <div className="flex flex-col h-full bg-[#050505]">
                 <div className="flex-1 overflow-y-auto p-4 space-y-4 font-mono text-sm">
                   {messages.map((msg, idx) => (
                     <motion.div 
@@ -593,32 +741,46 @@ export default function App() {
                       type="text" 
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                      placeholder="Ask VibeCoder to generate, edit, or explain code... (Press Enter)"
+                      onKeyDown={(e) => e.key === 'Enter' && handleProcessInput()}
+                      placeholder={isTyping ? "Model generating... (Type to steer & press Enter)" : "Ask VibeCoder to generate, edit, or explain... (Press Enter)"}
                       className="flex-1 bg-transparent border-none outline-none text-gray-200 font-mono text-sm placeholder-gray-600"
                     />
-                    <button 
-                      onClick={handleSend}
-                      className="p-1 text-orange-500 hover:text-orange-400 transition-colors"
-                    >
-                      <Play size={16} />
-                    </button>
+                    {isTyping ? (
+                      <>
+                        <button 
+                          onClick={handleProcessInput}
+                          className="p-1 text-blue-400 hover:text-blue-300 transition-colors mr-1"
+                          title="Steer Generation"
+                        >
+                          <Send size={16} />
+                        </button>
+                        <button 
+                          onClick={handleStopMode}
+                          className="p-1 text-red-500 hover:text-red-400 transition-colors"
+                          title="Stop Generation"
+                        >
+                          <Square size={16} fill="currentColor" />
+                        </button>
+                      </>
+                    ) : (
+                      <button 
+                        onClick={handleProcessInput}
+                        className="p-1 text-orange-500 hover:text-orange-400 transition-colors"
+                      >
+                        <Play size={16} />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
             )}
 
             {bottomTab === 'terminal' && (
-              <div className="p-4 font-mono text-xs text-gray-300">
-                <div className="text-orange-500 mb-2">vibe-coder@local:~$ </div>
-                <div className="text-gray-500">Terminal interface attached. Note: for pm2 to correctly run npm scripts with typescript locally, try `pm2 start server.ts --interpreter tsx`</div>
-              </div>
+              <TerminalPane />
             )}
             
             {bottomTab === 'output' && (
-              <div className="p-4 font-mono text-xs text-gray-300">
-                <div className="text-gray-500">[Info] Output channel initialized.</div>
-              </div>
+               <OutputPane />
             )}
           </div>
 
