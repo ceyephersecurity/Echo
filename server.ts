@@ -190,6 +190,39 @@ async function startServer() {
     }
   });
 
+  app.post('/api/run', async (req, res) => {
+    try {
+      const { path: scriptPath } = req.body;
+      if (!scriptPath) return res.status(400).json({ error: 'path is required' });
+      const fullPath = path.join(process.cwd(), scriptPath);
+      if (!fullPath.startsWith(process.cwd())) return res.status(403).json({ error: 'Invalid path' });
+      
+      console.log(`[EXEC] Running ${scriptPath}...`);
+      
+      const ext = path.extname(scriptPath);
+      let cmd = 'bash';
+      if (ext === '.py') cmd = 'python3';
+      else if (ext === '.js') cmd = 'node';
+
+      const child = spawn(cmd, [fullPath], { cwd: process.cwd() });
+      
+      child.stdout.on('data', (d) => {
+        console.log(`[STDOUT ${scriptPath}] ${d.toString().trim()}`);
+      });
+      child.stderr.on('data', (d) => {
+        console.error(`[STDERR ${scriptPath}] ${d.toString().trim()}`);
+      });
+      child.on('close', (code) => {
+        console.log(`[EXEC ${scriptPath}] Exited with code ${code}`);
+      });
+      
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error(`[EXEC ERROR] ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/search', async (req, res) => {
     try {
       const q = req.query.q as string;

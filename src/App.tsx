@@ -272,29 +272,7 @@ The application will automatically parse these code blocks and write the files t
     }
   };
 
-  const handleProcessInput = async () => {
-    const text = input.trim();
-    if (!text) return;
-    setInput('');
-
-    const isSteer = isTyping;
-
-    if (isTyping && activeControllerRef.current) {
-        activeControllerRef.current.abort();
-        await new Promise(r => setTimeout(r, 50));
-    }
-
-    const newMessages = [...messagesRef.current];
-
-    if (isSteer) {
-        newMessages.push({ role: 'user', content: `[STEER]: ${text}` });
-    } else {
-        newMessages.push({ role: 'user', content: text });
-    }
-    
-    newMessages.push({ role: 'agent', content: '' });
-    setMessages(newMessages);
-
+  const fetchChatResponse = async (messagesToPass: Message[], targetModel: string, isSteer: boolean) => {
     setIsTyping(true);
     const controller = new AbortController();
     activeControllerRef.current = controller;
@@ -304,7 +282,7 @@ The application will automatically parse these code blocks and write the files t
     const fileContexts = openFiles.map(f => `--- ${f.path} ---\n${fileContents[f.path] || ''}`).join('\n\n');
     const systemMemoryAddon = fileContexts ? `\n\nCURRENT OPEN FILES CONTEXT:\n${fileContexts}` : '';
 
-    const payloadMessages = newMessages.slice(0, -1).map(m => {
+    const payloadMessages = messagesToPass.slice(0, -1).map(m => {
        if (m.role === 'system') {
            return { role: 'system', content: m.content + systemMemoryAddon };
        }
@@ -314,7 +292,7 @@ The application will automatically parse these code blocks and write the files t
     try {
       console.log('Sending payload:', {
         baseUrl: ollamaUrl,
-        model: ollamaModel,
+        model: targetModel,
         messagesCount: payloadMessages.length
       });
 
@@ -326,7 +304,7 @@ The application will automatically parse these code blocks and write the files t
         body: JSON.stringify({
           baseUrl: ollamaUrl,
           payload: {
-            model: ollamaModel,
+            model: targetModel,
             messages: payloadMessages,
             stream: true,
           }
@@ -370,6 +348,37 @@ The application will automatically parse these code blocks and write the files t
                     currentMessages[currentMessages.length - 1] = { role: 'agent', content: finalAgentMessage };
                     return currentMessages;
                   });
+
+                  // Live file parsing
+                  if (activeControllerRef.current === controller) {
+                    const liveRegex = /```(?:file:)?([^\n]+)\n([\s\S]*?)(?:```|$)/g;
+                    let liveMatch;
+                    let currentLiveFile = '';
+                    let currentLiveContent = '';
+                    const newFileContents: Record<string, string> = {};
+                    while ((liveMatch = liveRegex.exec(finalAgentMessage)) !== null) {
+                        let pathMatch = liveMatch[1].trim();
+                        if (pathMatch.includes('/') || pathMatch.includes('.')) {
+                            if (pathMatch.startsWith('file:')) pathMatch = pathMatch.replace('file:', '').trim();
+                            currentLiveFile = pathMatch;
+                            currentLiveContent = liveMatch[2];
+                            newFileContents[currentLiveFile] = currentLiveContent;
+                        }
+                    }
+                    
+                    if (currentLiveFile) {
+                        setActiveFile(currentLiveFile);
+                        setOpenFiles(prev => {
+                            if (!prev.find(f => f.path === currentLiveFile)) {
+                                return [...prev, { name: currentLiveFile.split('/').pop() || currentLiveFile, path: currentLiveFile }];
+                            }
+                            return prev;
+                        });
+                    }
+                    if (Object.keys(newFileContents).length > 0) {
+                        setFileContents(prev => ({...prev, ...newFileContents}));
+                    }
+                  }
                 }
               } catch (e) {
                 console.error('JSON parsing error for line:', line, e);
@@ -386,6 +395,7 @@ The application will automatically parse these code blocks and write the files t
         const regex = /```(?:file:)?([^\n]+)\n([\s\S]*?)```/g;
         let match;
         const promises = [];
+        let autoRunScript = '';
         while ((match = regex.exec(finalAgentMessage)) !== null) {
             const filePath = match[1].trim();
             const content = match[2];
@@ -401,11 +411,22 @@ The application will automatically parse these code blocks and write the files t
                         body: JSON.stringify({ path: actualPath, content })
                     })
                 );
+                if (actualPath.endsWith('.py') || actualPath.endsWith('.js') || actualPath.endsWith('.sh')) {
+                    autoRunScript = actualPath;
+                }
             }
         }
         if (promises.length > 0) {
             await Promise.all(promises);
             loadFileTree();
+            if (autoRunScript) {
+                setBottomTab('output');
+                fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: autoRunScript })
+                }).catch(e => console.error('Failed to run script:', e));
+            }
         }
       }
       
@@ -437,6 +458,34 @@ The application will automatically parse these code blocks and write the files t
         activeControllerRef.current = null;
       }
     }
+  };
+
+  const handleProcessInput = async () => {
+    const text = input.trim();
+    if (!text) return;
+    setInput('');
+
+    const isSteer = isTyping;
+
+    if (isTyping && activeControllerRef.current) {
+        const oldCont = activeControllerRef.current;
+        activeControllerRef.current = null;
+        oldCont.abort();
+        await new Promise(r => setTimeout(r, 50));
+    }
+
+    const newMessages = [...messagesRef.current];
+
+    if (isSteer) {
+        newMessages.push({ role: 'user', content: `[STEER]: ${text}` });
+    } else {
+        newMessages.push({ role: 'user', content: text });
+    }
+    
+    newMessages.push({ role: 'agent', content: '' });
+    setMessages(newMessages);
+
+    fetchChatResponse(newMessages, ollamaModel, isSteer);
   };
 
   const handleStopMode = () => {
@@ -545,6 +594,26 @@ To create or edit a file, use EXACTLY this markdown format:
 The application will automatically parse these code blocks and write the files to disk. Always use this exact format!` }
         ]);
      }
+  };
+
+  const handleModelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newModel = e.target.value;
+    setOllamaModel(newModel);
+    
+    if (isTyping && activeControllerRef.current) {
+        const oldCont = activeControllerRef.current;
+        activeControllerRef.current = null;
+        oldCont.abort();
+        await new Promise(r => setTimeout(r, 50));
+        
+        const newMessages = [...messagesRef.current];
+        newMessages.push({ role: 'user', content: '[STEER]: Switching model. Please continue your response exactly from where it left off.' });
+        newMessages.push({ role: 'agent', content: '' });
+        setMessages(newMessages);
+        
+        // Use true for isSteer so "Stopped" wrapper is avoided 
+        fetchChatResponse(newMessages, newModel, true);
+    }
   };
 
   return (
@@ -748,7 +817,7 @@ The application will automatically parse these code blocks and write the files t
               )}
               <select 
                 value={ollamaModel}
-                onChange={(e) => setOllamaModel(e.target.value)}
+                onChange={handleModelChange}
                 className="bg-[#111] text-orange-200 border border-[#333] rounded px-2 py-0.5 text-xs outline-none focus:border-orange-500 max-w-[150px] truncate"
               >
                   {ollamaModels.length > 0 ? (
@@ -787,14 +856,24 @@ The application will automatically parse these code blocks and write the files t
                 {/* Input Area */}
                 <div className="p-3 bg-[#050505] border-t border-[#222222]">
                   <div className="flex items-center space-x-2">
-                    <span className="text-orange-500 font-mono">&gt;</span>
+                    {isTyping ? (
+                        <button 
+                          onClick={handleStopMode}
+                          className="p-1 text-red-500 hover:text-red-400 transition-colors cursor-pointer"
+                          title="Stop Generation"
+                        >
+                          <Square size={14} fill="currentColor" />
+                        </button>
+                    ) : (
+                        <span className="text-orange-500 font-mono pl-1">&gt;</span>
+                    )}
                     <input 
                       type="text" 
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleProcessInput()}
                       placeholder={isTyping ? "Model generating... (Type to steer & press Enter)" : "Ask VibeCoder to generate, edit, or explain... (Press Enter)"}
-                      className="flex-1 bg-transparent border-none outline-none text-gray-200 font-mono text-sm placeholder-gray-600"
+                      className="flex-1 bg-transparent border-none outline-none text-gray-200 font-mono text-sm placeholder-gray-600 ml-1"
                     />
                     {isTyping ? (
                       <>
@@ -804,13 +883,6 @@ The application will automatically parse these code blocks and write the files t
                           title="Steer Generation"
                         >
                           <Send size={16} />
-                        </button>
-                        <button 
-                          onClick={handleStopMode}
-                          className="p-1 text-red-500 hover:text-red-400 transition-colors"
-                          title="Stop Generation"
-                        >
-                          <Square size={16} fill="currentColor" />
                         </button>
                       </>
                     ) : (
