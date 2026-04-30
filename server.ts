@@ -41,15 +41,18 @@ async function startServer() {
 
   // API Proxy to Local Ollama Chat
   app.post('/api/chat', async (req, res) => {
+    console.log('[API/CHAT] Request received. Base URL:', req.body.baseUrl);
     const baseUrl = req.body.baseUrl || 'http://127.0.0.1:11434';
     const controller = new AbortController();
     
     // Abort fetch when client disconnects
     req.on('close', () => {
+      console.log('[API/CHAT] Request closed by client');
       controller.abort();
     });
 
     try {
+      console.log(`[API/CHAT] Fetching from ${baseUrl}/api/chat...`);
       const response = await fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
         headers: {
@@ -59,12 +62,15 @@ async function startServer() {
         signal: controller.signal
       });
 
+      console.log(`[API/CHAT] Status: ${response.status} ${response.statusText}`);
+
       if (!response.ok) {
         let errStr = response.statusText;
         try {
           const errBody = await response.json();
           if (errBody.error) errStr = errBody.error + " - " + (errBody.message || errBody.details);
         } catch(e) {}
+        console.error(`[API/CHAT] Ollama error: ${errStr}`);
         return res.status(response.status).json({ error: `Ollama failed: ${errStr}` });
       }
 
@@ -73,14 +79,16 @@ async function startServer() {
         res.setHeader('Transfer-Encoding', 'chunked');
         const readable = Readable.fromWeb(response.body as any);
         readable.pipe(res);
+        readable.on('end', () => console.log('[API/CHAT] Stream ended normally.'));
       } else {
         res.end();
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
+         console.log('[API/CHAT] AbortError handled');
          return res.end();
       }
-      console.error('Ollama connection error:', err);
+      console.error('[API/CHAT] Ollama connection error:', err);
       res.status(500).json({ error: err.message, message: 'Make sure Ollama is running locally.' });
     }
   });

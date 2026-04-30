@@ -36,16 +36,24 @@ export const TerminalPane = () => {
       });
       
       const handleResize = () => {
-         try { fitAddon.fit(); } catch(e) {}
+         try {
+            if (terminalRef.current && terminalRef.current.clientWidth > 0 && terminalRef.current.clientHeight > 0) {
+               fitAddon.fit();
+            }
+         } catch(e) {
+            console.error('Fit error', e);
+         }
       };
       
-      window.addEventListener('resize', handleResize);
-      setTimeout(handleResize, 100);
+      const resizeObserver = new ResizeObserver(() => {
+          handleResize();
+      });
+      resizeObserver.observe(terminalRef.current);
       
       return () => {
          ws.close();
          term.dispose();
-         window.removeEventListener('resize', handleResize);
+         resizeObserver.disconnect();
       }
    }, []);
    

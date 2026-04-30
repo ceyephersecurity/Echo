@@ -348,32 +348,37 @@ The application will automatically parse these code blocks and write the files t
 
       if (reader) {
         let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            console.log('Received chunk line:', line);
-            try {
-              const parsed = JSON.parse(line);
-              if (parsed.message?.content) {
-                finalAgentMessage += parsed.message.content;
-                setMessages(prev => {
-                  if (activeControllerRef.current !== controller) return prev;
-                  const currentMessages = [...prev];
-                  currentMessages[currentMessages.length - 1] = { role: 'agent', content: finalAgentMessage };
-                  return currentMessages;
-                });
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              console.log('Received chunk line:', line);
+              try {
+                const parsed = JSON.parse(line);
+                if (parsed.message?.content) {
+                  finalAgentMessage += parsed.message.content;
+                  setMessages(prev => {
+                    if (activeControllerRef.current !== controller) return prev;
+                    const currentMessages = [...prev];
+                    currentMessages[currentMessages.length - 1] = { role: 'agent', content: finalAgentMessage };
+                    return currentMessages;
+                  });
+                }
+              } catch (e) {
+                console.error('JSON parsing error for line:', line, e);
               }
-            } catch (e) {
-              console.error('JSON parsing error for line:', line, e);
             }
           }
+        } catch (streamErr: any) {
+           console.error('Stream read error:', streamErr);
+           throw streamErr;
         }
       }
       
@@ -405,6 +410,7 @@ The application will automatically parse these code blocks and write the files t
       }
       
     } catch (error: any) {
+      console.error('[App] Complete error fetching chat:', error);
       if (error.name === 'AbortError') {
          if (!isSteer && activeControllerRef.current === controller) {
              setMessages(prev => {
@@ -507,6 +513,20 @@ The application will automatically parse these code blocks and write the files t
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleSaveActiveFile = async () => {
+    if (!activeFile) return;
+    try {
+      await fetch('/api/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: activeFile, content: fileContents[activeFile] || '' })
+      });
+      // Optional: Maybe a nice little 'Saved!' state here instead of an alert, but alert works for MVP.
+    } catch (err) {
+      console.error('Failed to save file:', err);
     }
   };
 
@@ -654,6 +674,14 @@ The application will automatically parse these code blocks and write the files t
         {/* Code Editor Mockup */}
         <div className="flex-1 bg-[#050505] p-0 overflow-auto font-mono text-sm leading-relaxed text-[#c9d1d9] relative">
           <div className="absolute top-4 right-4 text-xs flex flex-row items-center space-x-3 bg-[#0a0a0a] border border-[#222222] rounded-md px-2 py-1 shadow-sm z-10">
+             {activeFile && (
+               <button 
+                 onClick={handleSaveActiveFile}
+                 className="flex items-center space-x-1 border-r border-[#333] pr-3 text-gray-400 hover:text-orange-400 transition-colors"
+               >
+                 <span>Save (Ctrl+S)</span>
+               </button>
+             )}
              <div className="flex items-center space-x-1.5 border-r border-[#333] pr-3">
               {ollamaStatus === 'checking' && <span className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(234,179,8,0.8)]"></span>}
               {ollamaStatus === 'connected' && <span className="w-2 h-2 bg-orange-500 rounded-full shadow-[0_0_8px_rgba(249,115,22,0.8)]"></span>}
@@ -669,9 +697,18 @@ The application will automatically parse these code blocks and write the files t
           
           <div className="h-full w-full">
             {activeFile ? (
-              <pre className="!bg-transparent m-0 p-4 pt-16 h-full overflow-auto whitespace-pre">
-                {fileContents[activeFile] || 'Loading...'}
-              </pre>
+              <textarea
+                className="w-full h-full bg-transparent text-[#c9d1d9] p-4 pt-16 font-mono text-sm leading-relaxed resize-none outline-none"
+                value={fileContents[activeFile] || ''}
+                onChange={(e) => setFileContents(prev => ({ ...prev, [activeFile]: e.target.value }))}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                    e.preventDefault();
+                    handleSaveActiveFile();
+                  }
+                }}
+                spellCheck={false}
+              />
             ) : (
               <div className="h-full flex items-center justify-center text-gray-600">
                 <span>No file selected. Open a file from the explorer.</span>
