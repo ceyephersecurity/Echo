@@ -71,7 +71,7 @@ const FileTree = ({ nodes, onSelect, onContextMenu, depth = 0 }: { nodes: TreeNo
 
 export default function App() {
   const [messages, setMessages] = useState([
-    { role: 'system', content: 'VibeCoder initialized. Connected to local Ollama. Ready for execution.\n\nNote: If you have connection issues, ensure Ollama is running with `ollama run deepseek-coder:6.7b`. (The proxy server automatically handles CORS!)\n\nIf PM2 `npm run dev` fails, use `pm2 start "npm run dev" --name echo` or `pm2 start server.ts --interpreter tsx`.' }
+    { role: 'system', content: 'VibeCoder initialized. Connected to local Ollama. Ready for execution.\n\nNote: If you have connection issues, ensure Ollama is running with `ollama run deepseek-coder:6.7b`. (The proxy server automatically handles CORS!)\n\nIf running via PM2, since `tsx` is a local dependency, use:\n`pm2 start ./node_modules/.bin/tsx --name echo -- server.ts`\nor\n`pm2 start npm --name echo -- run dev`' }
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
