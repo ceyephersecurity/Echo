@@ -253,8 +253,9 @@ async function startServer() {
     let shell: any;
     try {
         console.log('[WS] Terminal connected. Spawning bash...');
-        // use basic bash, ignoring custom prompts if tricky, but -i ensures it behaves like a shell
-        shell = spawn('bash', ['-i'], {
+        // Spawn bash via python's pty module to allocate a real pseudo-terminal
+        // This natively handles \r\n conversion, Ctrl+C (SIGINT), text formatting, and interactive echoing!
+        shell = spawn('python3', ['-c', 'import pty; pty.spawn("/bin/bash")'], {
             env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
             cwd: process.cwd(),
         });

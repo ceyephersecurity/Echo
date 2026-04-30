@@ -341,14 +341,17 @@ The application will automatically parse these code blocks and write the files t
       const decoder = new TextDecoder();
 
       if (reader) {
+        let buffer = '';
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n').filter(Boolean);
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
           
           for (const line of lines) {
+            if (!line.trim()) continue;
             try {
               const parsed = JSON.parse(line);
               if (parsed.message?.content) {
@@ -717,20 +720,23 @@ The application will automatically parse these code blocks and write the files t
             {bottomTab === 'chat' && (
               <div className="flex flex-col h-full bg-[#050505]">
                 <div className="flex-1 overflow-y-auto p-4 space-y-4 font-mono text-sm">
-                  {messages.map((msg, idx) => (
-                    <motion.div 
-                      key={idx} 
-                      className={`flex flex-col space-y-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
-                    >
-                      <div className={`px-3 py-2 rounded-lg max-w-[80%] whitespace-pre-wrap ${
-                        msg.role === 'system' ? 'bg-[#111111] text-gray-500 text-xs border border-[#222222]' :
-                        msg.role === 'user' ? 'bg-orange-600 text-white shadow-[0_0_10px_rgba(234,88,12,0.3)]' :
-                        msg.role === 'agent' ? 'bg-[#111111] text-gray-300 border border-orange-500/30' : ''
-                      }`}>
-                        {msg.content}
-                      </div>
-                    </motion.div>
-                  ))}
+                  {messages.map((msg, idx) => {
+                    if (msg.role === 'system' && msg.content.includes('SYSTEM INSTRUCTIONS')) return null;
+                    return (
+                      <motion.div 
+                        key={idx} 
+                        className={`flex flex-col space-y-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
+                      >
+                        <div className={`px-3 py-2 rounded-lg max-w-[80%] whitespace-pre-wrap ${
+                          msg.role === 'system' ? 'bg-[#111111] text-gray-500 text-xs border border-[#222222]' :
+                          msg.role === 'user' ? 'bg-orange-600 text-white shadow-[0_0_10px_rgba(234,88,12,0.3)]' :
+                          msg.role === 'agent' ? 'bg-[#111111] text-gray-300 border border-orange-500/30' : ''
+                        }`}>
+                          {msg.content}
+                        </div>
+                      </motion.div>
+                    );
+                  })}
                 </div>
       
                 {/* Input Area */}
