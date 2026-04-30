@@ -116,25 +116,27 @@ const FileTree = ({ nodes, onSelect, onContextMenu, depth = 0, currentPath = '',
 };
 
 export default function App() {
-  const [messages, setMessages] = useState(() => {
-    try {
-      const saved = localStorage.getItem('vibecoder_messages');
-      if (saved) return JSON.parse(saved);
-    } catch(e) {}
-    return [
+  const getInitialMessages = () => [
       { role: 'system', content: `VibeCoder initialized. Connected to local Ollama.
 
 SYSTEM INSTRUCTIONS (For Model):
 CRITICAL: You are an autonomous coding agent. Do NOT output conversational code examples. You MUST ONLY write complete files using the EXACT format below. The file block format is your ONLY way to create files.
 
-When the user asks you to code a project or create files, you MUST place ALL files in a new directory under the \`projects/\` folder (e.g. \`projects/my-new-app/\`).
+You are working inside a project workspace. You must place all files at the root of the workspace or inside subdirectories as appropriate (e.g., src/index.js, package.json). Do NOT use absolute paths.
 
 To create or edit a file, use EXACTLY this markdown format:
-\`\`\`file:projects/my-new-app/filename.ext
+\`\`\`file:filename.ext
 <file contents here>
 \`\`\`
 The application will automatically parse these code blocks and write the files to disk.` }
-    ];
+  ];
+
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const saved = localStorage.getItem('vibecoder_messages');
+      if (saved) return JSON.parse(saved);
+    } catch(e) {}
+    return getInitialMessages();
   });
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -169,7 +171,7 @@ The application will automatically parse these code blocks and write the files t
       return;
     }
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}`);
+      const res = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}${activeWorkspace ? '&dir=' + encodeURIComponent(activeWorkspace) : ''}`);
       const data = await res.json();
       setSearchResults(data);
     } catch(e) {
@@ -186,9 +188,15 @@ The application will automatically parse these code blocks and write the files t
   
   const [bottomTab, setBottomTab] = useState<'chat'|'terminal'|'output'>('chat');
 
+  const [activeWorkspace, setActiveWorkspace] = useState<string>('');
+  
+  const [showProjectModal, setShowProjectModal] = useState<'create' | 'open' | null>(null);
+  const [availableProjects, setAvailableProjects] = useState<string[]>([]);
+  const [newProjectName, setNewProjectName] = useState('');
+
   // Load File Tree initially
   const loadFileTree = () => {
-    fetch('/api/files')
+    fetch(`/api/files${activeWorkspace ? '?dir=' + encodeURIComponent(activeWorkspace) : ''}`)
        .then(r => r.json())
        .then(val => {
           if (Array.isArray(val)) setFileTree(val);
@@ -198,7 +206,7 @@ The application will automatically parse these code blocks and write the files t
 
   useEffect(() => {
     loadFileTree();
-  }, []);
+  }, [activeWorkspace]);
 
   // Close context menu on click outside
   useEffect(() => {
@@ -362,6 +370,12 @@ The application will automatically parse these code blocks and write the files t
                         let pathMatch = liveMatch[1].trim();
                         if (pathMatch.includes('/') || pathMatch.includes('.')) {
                             if (pathMatch.startsWith('file:')) pathMatch = pathMatch.replace('file:', '').trim();
+                            if (activeWorkspace) {
+                                if (pathMatch.startsWith('/')) pathMatch = pathMatch.substring(1);
+                                if (!pathMatch.startsWith(activeWorkspace)) {
+                                   pathMatch = activeWorkspace + '/' + pathMatch;
+                                }
+                            }
                             currentLiveFile = pathMatch;
                             currentLiveContent = liveMatch[2];
                             newFileContents[currentLiveFile] = currentLiveContent;
@@ -405,6 +419,12 @@ The application will automatically parse these code blocks and write the files t
                 let actualPath = filePath;
                 if (actualPath.startsWith('file:')) {
                     actualPath = actualPath.replace('file:', '').trim();
+                }
+                if (activeWorkspace) {
+                    if (actualPath.startsWith('/')) actualPath = actualPath.substring(1);
+                    if (!actualPath.startsWith(activeWorkspace)) {
+                       actualPath = activeWorkspace + '/' + actualPath;
+                    }
                 }
                 promises.push(
                     fetch('/api/file', {
@@ -582,22 +602,7 @@ The application will automatically parse these code blocks and write the files t
   };
 
   const handleClearChat = () => {
-     if (confirm('Are you sure you want to clear the chat history?')) {
-        setMessages([
-          { role: 'system', content: `VibeCoder initialized. Connected to local Ollama.
-
-SYSTEM INSTRUCTIONS (For Model):
-CRITICAL: You are an autonomous coding agent. Do NOT output conversational code examples. You MUST ONLY write complete files using the EXACT format below. The file block format is your ONLY way to create files.
-
-When the user asks you to code a project or create files, you MUST place ALL files in a new directory under the \`projects/\` folder (e.g. \`projects/my-new-app/\`).
-
-To create or edit a file, use EXACTLY this markdown format:
-\`\`\`file:projects/my-new-app/filename.ext
-<file contents here>
-\`\`\`
-The application will automatically parse these code blocks and write the files to disk.` }
-        ]);
-     }
+    setMessages(getInitialMessages());
   };
 
   const handleModelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -626,7 +631,143 @@ The application will automatically parse these code blocks and write the files t
   };
 
   return (
-    <div className="flex h-screen bg-[#050505] text-gray-300 font-sans overflow-hidden">
+    <div className="flex flex-col h-screen bg-[#050505] text-gray-300 font-sans overflow-hidden">
+      {/* Top Menu Bar */}
+      <div className="flex items-center px-4 py-1.5 bg-[#111] border-b border-[#222]">
+        <div className="relative group">
+           <button className="text-sm px-2 py-1 hover:bg-[#333] rounded">File</button>
+           <div className="absolute left-0 top-full mt-1 w-48 bg-[#111] border border-[#333] rounded shadow-xl hidden group-hover:block z-50 py-1">
+               <button 
+                  onClick={() => setShowProjectModal('create')} 
+                  className="w-full text-left px-4 py-1.5 hover:bg-orange-600 hover:text-white text-gray-300 text-sm"
+               >
+                  New Project...
+               </button>
+               <button 
+                  onClick={() => {
+                     fetch('/api/projects').then(res => res.json()).then(data => {
+                        setAvailableProjects(data || []);
+                        setShowProjectModal('open');
+                     });
+                  }} 
+                  className="w-full text-left px-4 py-1.5 hover:bg-orange-600 hover:text-white text-gray-300 text-sm"
+               >
+                  Open Project...
+               </button>
+           </div>
+        </div>
+        <div className="ml-auto text-xs text-gray-500 flex items-center space-x-2">
+            {activeWorkspace ? (
+                <>
+                    <FolderOpen size={14} className="text-orange-500" />
+                    <span>{activeWorkspace}</span>
+                    <button 
+                        onClick={() => setActiveWorkspace('')} 
+                        className="ml-2 px-1 border border-[#333] hover:border-gray-500 rounded text-gray-400"
+                        title="Close Project"
+                    >
+                        ×
+                    </button>
+                </>
+            ) : (
+                <span>No Project Workspace Open</span>
+            )}
+        </div>
+      </div>
+
+      {showProjectModal && (
+          <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center">
+              <div className="bg-[#111] border border-[#333] p-6 rounded-lg shadow-xl w-96">
+                  <h2 className="text-lg text-white mb-4">
+                      {showProjectModal === 'create' ? 'Create New Project' : 'Open Project'}
+                  </h2>
+                  
+                  {showProjectModal === 'create' ? (
+                      <div>
+                          <label className="block text-xs text-gray-500 mb-1">Project Name (no spaces)</label>
+                          <input 
+                              type="text" 
+                              value={newProjectName}
+                              onChange={(e) => setNewProjectName(e.target.value.replace(/\s+/g, '-'))}
+                              className="w-full bg-[#050505] border border-[#333] rounded px-3 py-2 text-white outline-none focus:border-orange-500 mb-4"
+                              placeholder="my-awesome-app"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && newProjectName.trim()) {
+                                      fetch('/api/projects', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ name: newProjectName.trim() })
+                                      }).then(() => {
+                                          setActiveWorkspace('projects/' + newProjectName.trim());
+                                          setShowProjectModal(null);
+                                          setNewProjectName('');
+                                      });
+                                  }
+                              }}
+                          />
+                      </div>
+                  ) : (
+                      <div className="mb-4 max-h-60 overflow-y-auto border border-[#333] rounded bg-[#050505]">
+                          {availableProjects.length === 0 ? (
+                              <div className="p-4 text-center text-sm text-gray-500">No projects found. Create one first.</div>
+                          ) : (
+                              availableProjects.map(p => (
+                                  <button 
+                                      key={p} 
+                                      onClick={() => {
+                                          setActiveWorkspace('projects/' + p);
+                                          setShowProjectModal(null);
+                                      }}
+                                      className="block w-full text-left px-4 py-2 hover:bg-[#222] border-b border-[#222] last:border-0"
+                                  >
+                                      <div className="flex items-center space-x-2">
+                                          <FolderOpen size={14} className="text-gray-400" />
+                                          <span>{p}</span>
+                                      </div>
+                                  </button>
+                              ))
+                          )}
+                      </div>
+                  )}
+
+                  <div className="flex justify-end space-x-2">
+                      <button 
+                          onClick={() => {
+                              setShowProjectModal(null);
+                              setNewProjectName('');
+                          }}
+                          className="px-4 py-1.5 rounded text-sm text-gray-400 hover:bg-[#222]"
+                      >
+                          Cancel
+                      </button>
+                      {showProjectModal === 'create' && (
+                          <button 
+                              onClick={() => {
+                                  if (newProjectName.trim()) {
+                                      fetch('/api/projects', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ name: newProjectName.trim() })
+                                      }).then(() => {
+                                          setActiveWorkspace('projects/' + newProjectName.trim());
+                                          setShowProjectModal(null);
+                                          setNewProjectName('');
+                                      });
+                                  }
+                              }}
+                              className="px-4 py-1.5 rounded text-sm bg-orange-600 hover:bg-orange-500 text-white disabled:opacity-50"
+                              disabled={!newProjectName.trim()}
+                          >
+                              Create
+                          </button>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
+
+      <div className="flex h-full overflow-hidden">
       {/* Context Menu */}
       {contextMenu && (
         <div 
@@ -917,10 +1058,9 @@ The application will automatically parse these code blocks and write the files t
                <OutputPane />
             )}
           </div>
-
         </div>
-
       </div>
+    </div>
     </div>
   );
 }

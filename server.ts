@@ -126,8 +126,37 @@ async function startServer() {
         );
         return items.filter(Boolean);
       };
-      const tree = await getTree(process.cwd());
+      const requestedDir = typeof req.query.dir === 'string' && req.query.dir ? path.join(process.cwd(), req.query.dir) : process.cwd();
+      if (!requestedDir.startsWith(process.cwd())) return res.status(403).json({ error: 'Invalid path' });
+      // ensure the directory exists, otherwise return empty tree
+      try { await fs.access(requestedDir); } catch { return res.json([]); }
+      const tree = await getTree(requestedDir);
       res.json(tree);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/projects', async (req, res) => {
+    try {
+      const projectsDir = path.join(process.cwd(), 'projects');
+      try { await fs.access(projectsDir); } catch { return res.json([]); }
+      const entries = await fs.readdir(projectsDir, { withFileTypes: true });
+      const projects = entries.filter(e => e.isDirectory()).map(e => e.name);
+      res.json(projects);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/projects', async (req, res) => {
+    try {
+      const { name } = req.body;
+      if (!name) return res.status(400).json({ error: 'name is required' });
+      const projectPath = path.join(process.cwd(), 'projects', name);
+      if (!projectPath.startsWith(path.join(process.cwd(), 'projects'))) return res.status(403).json({ error: 'Invalid name' });
+      await fs.mkdir(projectPath, { recursive: true });
+      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -227,6 +256,10 @@ async function startServer() {
     try {
       const q = req.query.q as string;
       if (!q) return res.json([]);
+      const searchRoot = typeof req.query.dir === 'string' && req.query.dir ? path.join(process.cwd(), req.query.dir) : process.cwd();
+      if (!searchRoot.startsWith(process.cwd())) return res.status(403).json({ error: 'Invalid path' });
+      try { await fs.access(searchRoot); } catch { return res.json([]); }
+      
       const results: { path: string, line: number, content: string }[] = [];
       const searchDir = async (dir: string) => {
         const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -252,7 +285,7 @@ async function startServer() {
            }
         }
       };
-      await searchDir(process.cwd());
+      await searchDir(searchRoot);
       res.json(results);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
