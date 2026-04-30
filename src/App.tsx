@@ -312,6 +312,12 @@ The application will automatically parse these code blocks and write the files t
     });
 
     try {
+      console.log('Sending payload:', {
+        baseUrl: ollamaUrl,
+        model: ollamaModel,
+        messagesCount: payloadMessages.length
+      });
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -352,6 +358,7 @@ The application will automatically parse these code blocks and write the files t
           
           for (const line of lines) {
             if (!line.trim()) continue;
+            console.log('Received chunk line:', line);
             try {
               const parsed = JSON.parse(line);
               if (parsed.message?.content) {
@@ -364,6 +371,7 @@ The application will automatically parse these code blocks and write the files t
                 });
               }
             } catch (e) {
+              console.error('JSON parsing error for line:', line, e);
             }
           }
         }
