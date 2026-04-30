@@ -47,8 +47,8 @@ async function startServer() {
     
     // Abort fetch when client disconnects
     req.on('close', () => {
-      console.log('[API/CHAT] Request closed by client');
-      controller.abort();
+      console.log('[API/CHAT] Request closed by client (req.on close)');
+      // controller.abort(); // Let's see if this was prematurely aborting the request
     });
 
     try {

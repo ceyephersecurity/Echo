@@ -37,7 +37,7 @@ export const TerminalPane = () => {
       
       const handleResize = () => {
          try {
-            if (terminalRef.current && terminalRef.current.clientWidth > 0 && terminalRef.current.clientHeight > 0) {
+            if (term.element && terminalRef.current && terminalRef.current.clientWidth > 0 && terminalRef.current.clientHeight > 0) {
                fitAddon.fit();
             }
          } catch(e) {
@@ -46,7 +46,7 @@ export const TerminalPane = () => {
       };
       
       const resizeObserver = new ResizeObserver(() => {
-          handleResize();
+          requestAnimationFrame(() => handleResize());
       });
       resizeObserver.observe(terminalRef.current);
       
