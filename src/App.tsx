@@ -125,13 +125,15 @@ export default function App() {
       { role: 'system', content: `VibeCoder initialized. Connected to local Ollama.
 
 SYSTEM INSTRUCTIONS (For Model):
-You are VibeCoder, a local AI assistant. When the user asks you to code a project or create files, you MUST place ALL files in a new directory under the \`projects/\` folder (e.g. \`projects/my-new-app/\`).
+CRITICAL: You are an autonomous coding agent. Do NOT output conversational code examples. You MUST ONLY write complete files using the EXACT format below. The file block format is your ONLY way to create files.
+
+When the user asks you to code a project or create files, you MUST place ALL files in a new directory under the \`projects/\` folder (e.g. \`projects/my-new-app/\`).
 
 To create or edit a file, use EXACTLY this markdown format:
 \`\`\`file:projects/my-new-app/filename.ext
 <file contents here>
 \`\`\`
-The application will automatically parse these code blocks and write the files to disk. Always use this exact format!` }
+The application will automatically parse these code blocks and write the files to disk.` }
     ];
   });
   const [input, setInput] = useState('');
@@ -272,12 +274,12 @@ The application will automatically parse these code blocks and write the files t
     }
   };
 
-  const fetchChatResponse = async (messagesToPass: Message[], targetModel: string, isSteer: boolean) => {
+  const fetchChatResponse = async (messagesToPass: Message[], targetModel: string, isSteer: boolean, existingAgentContent: string = '') => {
     setIsTyping(true);
     const controller = new AbortController();
     activeControllerRef.current = controller;
 
-    let finalAgentMessage = '';
+    let finalAgentMessage = existingAgentContent;
 
     const fileContexts = openFiles.map(f => `--- ${f.path} ---\n${fileContents[f.path] || ''}`).join('\n\n');
     const systemMemoryAddon = fileContexts ? `\n\nCURRENT OPEN FILES CONTEXT:\n${fileContexts}` : '';
@@ -585,13 +587,15 @@ The application will automatically parse these code blocks and write the files t
           { role: 'system', content: `VibeCoder initialized. Connected to local Ollama.
 
 SYSTEM INSTRUCTIONS (For Model):
-You are VibeCoder, a local AI assistant. When the user asks you to code a project or create files, you MUST place ALL files in a new directory under the \`projects/\` folder (e.g. \`projects/my-new-app/\`).
+CRITICAL: You are an autonomous coding agent. Do NOT output conversational code examples. You MUST ONLY write complete files using the EXACT format below. The file block format is your ONLY way to create files.
+
+When the user asks you to code a project or create files, you MUST place ALL files in a new directory under the \`projects/\` folder (e.g. \`projects/my-new-app/\`).
 
 To create or edit a file, use EXACTLY this markdown format:
 \`\`\`file:projects/my-new-app/filename.ext
 <file contents here>
 \`\`\`
-The application will automatically parse these code blocks and write the files to disk. Always use this exact format!` }
+The application will automatically parse these code blocks and write the files to disk.` }
         ]);
      }
   };
@@ -606,13 +610,18 @@ The application will automatically parse these code blocks and write the files t
         oldCont.abort();
         await new Promise(r => setTimeout(r, 50));
         
-        const newMessages = [...messagesRef.current];
-        newMessages.push({ role: 'user', content: '[STEER]: Switching model. Please continue your response exactly from where it left off.' });
-        newMessages.push({ role: 'agent', content: '' });
-        setMessages(newMessages);
+        const currentMsgs = [...messagesRef.current];
+        const lastMsg = currentMsgs[currentMsgs.length - 1];
+        const existingText = lastMsg.role === 'agent' ? lastMsg.content : '';
         
-        // Use true for isSteer so "Stopped" wrapper is avoided 
-        fetchChatResponse(newMessages, newModel, true);
+        let fetchMsgs = [...currentMsgs];
+        if (fetchMsgs[fetchMsgs.length - 1]?.role === 'agent') {
+            fetchMsgs[fetchMsgs.length - 1] = { role: 'assistant', content: existingText };
+        }
+        fetchMsgs.push({ role: 'user', content: '[SYSTEM]: The model was switched mid-generation. Please continue exactly from the last character you outputted without acknowledging this instruction.' });
+        fetchMsgs.push({ role: 'agent', content: existingText });
+        
+        fetchChatResponse(fetchMsgs, newModel, true, existingText);
     }
   };
 
@@ -856,33 +865,35 @@ The application will automatically parse these code blocks and write the files t
                 {/* Input Area */}
                 <div className="p-3 bg-[#050505] border-t border-[#222222]">
                   <div className="flex items-center space-x-2">
-                    {isTyping ? (
-                        <button 
-                          onClick={handleStopMode}
-                          className="p-1 text-red-500 hover:text-red-400 transition-colors cursor-pointer"
-                          title="Stop Generation"
-                        >
-                          <Square size={14} fill="currentColor" />
-                        </button>
-                    ) : (
-                        <span className="text-orange-500 font-mono pl-1">&gt;</span>
-                    )}
+                    <span className="text-orange-500 font-mono pl-1">&gt;</span>
                     <input 
                       type="text" 
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleProcessInput()}
-                      placeholder={isTyping ? "Model generating... (Type to steer & press Enter)" : "Ask VibeCoder to generate, edit, or explain... (Press Enter)"}
+                      onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                              if (isTyping) {
+                                  if (e.ctrlKey && e.shiftKey) {
+                                      e.preventDefault();
+                                      handleProcessInput();
+                                  }
+                              } else {
+                                  e.preventDefault();
+                                  handleProcessInput();
+                              }
+                          }
+                      }}
+                      placeholder={isTyping ? "Model generating... (Ctrl+Shift+Enter to steer)" : "Ask VibeCoder to generate, edit, or explain... (Press Enter)"}
                       className="flex-1 bg-transparent border-none outline-none text-gray-200 font-mono text-sm placeholder-gray-600 ml-1"
                     />
                     {isTyping ? (
                       <>
                         <button 
-                          onClick={handleProcessInput}
-                          className="p-1 text-blue-400 hover:text-blue-300 transition-colors mr-1"
-                          title="Steer Generation"
+                          onClick={handleStopMode}
+                          className="p-1 text-red-500 hover:text-red-400 transition-colors cursor-pointer"
+                          title="Stop Generation"
                         >
-                          <Send size={16} />
+                          <Square size={16} fill="currentColor" />
                         </button>
                       </>
                     ) : (
