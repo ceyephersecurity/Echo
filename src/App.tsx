@@ -39,7 +39,7 @@ export default function App() {
     try {
       setMessages(prev => [...prev, { role: 'agent', content: '' }]);
 
-      const response = await fetch('http://localhost:11434/api/chat', {
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -55,7 +55,12 @@ export default function App() {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to connect to Ollama: ${response.statusText}`);
+        let errStr = response.statusText;
+        try {
+          const errBody = await response.json();
+          if (errBody.error) errStr = errBody.error + " - " + (errBody.message || errBody.details);
+        } catch(e) {}
+        throw new Error(`Failed to connect via proxy: ${errStr}`);
       }
 
       const reader = response.body?.getReader();
